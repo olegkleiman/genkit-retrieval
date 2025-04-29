@@ -3,8 +3,13 @@
 import { googleAI, gemini20Flash } from '@genkit-ai/googleai';
 import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
 import { genkit, z } from 'genkit/beta';
-import { devLocalIndexerRef, devLocalRetrieverRef } from '@genkit-ai/dev-local-vectorstore';
+import { 
+    devLocalIndexerRef, 
+    devLocalRetrieverRef,
+    devLocalVectorstore
+ } from '@genkit-ai/dev-local-vectorstore';
 import { Document } from 'genkit/retriever';
+import { logger } from 'genkit/logging';
 import { chunk } from 'llm-chunk';
 import { startFlowServer } from '@genkit-ai/express';
 import path from 'path';
@@ -22,12 +27,25 @@ async function extractTextFromPdf(filePath: string) {
     return data.text;
 }
 
+logger.setLogLevel('debug');
+
 googleAI({ apiKey: process.env.GOOGLE_API_KEY });
 
 const ai = genkit({
-    plugins: [googleAI(), vertexAI()],
+
+    plugins: [
+        googleAI(), 
+        vertexAI(), 
+        devLocalVectorstore([
+            {
+                indexName: 'menuQA',
+                embedder: textEmbedding004,            
+            }
+        ])
+    ],
     model: gemini20Flash,
 });
+
 
 const chunkingConfig = {
     minLength: 1000,
@@ -65,7 +83,7 @@ const indexFlow = ai.defineFlow({
         // Add documents to the index.
         await ai.index({
             indexer: menuPdfIndexer,
-            documents,
+            documents
         });
     }
 );
