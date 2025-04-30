@@ -88,9 +88,9 @@ const indexFlow = ai.defineFlow({
     }
 );
 
-export const menuQAFlow = ai.defineFlow(
+export const RAGFlow = ai.defineFlow(
     {
-        name: "menuQAFlow",
+        name: "RAGFlow",
         inputSchema: z.string(),
     },
     async (input: string) => {
@@ -118,6 +118,6 @@ export const menuQAFlow = ai.defineFlow(
 );
 
 startFlowServer({
-    flows: [menuQAFlow, indexFlow],
+    flows: [RAGFlow, indexFlow],
     port: 3400,
 });

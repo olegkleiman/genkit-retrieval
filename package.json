@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "npx tsx src/index.ts",
+    "start": "node --watch tsx src/index.ts",
     "devui": "npx genkit start -- npm run dev"
   },
   "keywords": [],
