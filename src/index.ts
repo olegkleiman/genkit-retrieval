@@ -78,7 +78,7 @@ const indexFlow = ai.defineFlow({
         // Convert chunks of text into documents to store in the index.
         const documents = chunks.map((text) => {
                 return Document.fromText(text, { filePath });
-            });
+        });
 
         // Add documents to the index.
         await ai.index({
@@ -107,11 +107,7 @@ export const menuQAFlow = ai.defineFlow(
             model: gemini20Flash,
             prompt: `
                 You are acting as a helpful AI assistant that can answer 
-                questions about the food available on the menu at Genkit Grub Pub.
-
-                Use only the context provided to answer the question.
-                If you don't know, do not make up an answer.
-                Do not add or change items on the menu.
+                questions about the topic covered in the article attached.
 
                 Question: ${input}`,
             docs
