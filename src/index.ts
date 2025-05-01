@@ -1,6 +1,6 @@
 // from https://firebase.google.com/docs/genkit/rag
 
-import { googleAI, gemini20Flash } from '@genkit-ai/googleai';
+import { googleAI, gemini20Flash, gemini25FlashPreview0417 } from '@genkit-ai/googleai';
 import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
 import { genkit, z } from 'genkit/beta';
 import { 
@@ -8,6 +8,11 @@ import {
     devLocalRetrieverRef,
     devLocalVectorstore
  } from '@genkit-ai/dev-local-vectorstore';
+ import {
+    // llama31,
+    llama32,
+    vertexAIModelGarden,
+  } from '@genkit-ai/vertexai/modelgarden';
 import { Document } from 'genkit/retriever';
 import { logger } from 'genkit/logging';
 import { chunk } from 'llm-chunk';
@@ -34,7 +39,11 @@ googleAI({ apiKey: process.env.GOOGLE_API_KEY });
 const ai = genkit({
 
     plugins: [
-        googleAI(), 
+        googleAI(),
+        // vertexAIModelGarden({
+        //     location: 'us-central1',
+        //     models: [llama32]
+        // }),
         vertexAI(), 
         devLocalVectorstore([
             {
@@ -43,9 +52,8 @@ const ai = genkit({
             }
         ])
     ],
-    model: gemini20Flash,
+    model: gemini25FlashPreview0417// gemini20Flash,
 });
-
 
 const chunkingConfig = {
     minLength: 1000,
@@ -104,7 +112,7 @@ export const RAGFlow = ai.defineFlow(
 
         // generate a response
         const text =  ai.generate({
-            model: gemini20Flash,
+            model: gemini25FlashPreview0417, // llama32, //gemini20Flash,
             prompt: `
                 You are acting as a helpful AI assistant that can answer 
                 questions about the topic covered in the article attached.
