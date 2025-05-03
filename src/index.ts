@@ -25,7 +25,8 @@ import pdf from 'pdf-parse';
 import dotenv from 'dotenv';
 dotenv.config();
 
-console.log("Hello from Genkit!");
+import { getEvents } from './tools';
+import { ai } from './genkit';
 
 async function extractTextFromPdf(filePath: string) {
     try {
@@ -40,28 +41,29 @@ async function extractTextFromPdf(filePath: string) {
 }
 
 logger.setLogLevel('debug');
+logger.debug("Hello from Genkit!");
 
 googleAI({ apiKey: process.env.GOOGLE_API_KEY });
 
-const ai = genkit({
+// const ai = genkit({
 
-    plugins: [
-        googleAI(),
-        // vertexAIModelGarden({
-        //     location: 'us-central1',
-        //     models: [llama32]
-        // }),
-        vertexAI(), 
-        devLocalVectorstore([
-            {
-                indexName: 'menuQA',
-                embedder: textEmbedding004,            
-            }
-        ])
-    ],
-    promptDir: './llm_prompts',
-    model: gemini25FlashPreview0417// gemini20Flash,
-});
+//     plugins: [
+//         googleAI(),
+//         // vertexAIModelGarden({
+//         //     location: 'us-central1',
+//         //     models: [llama32]
+//         // }),
+//         vertexAI(), 
+//         devLocalVectorstore([
+//             {
+//                 indexName: 'menuQA',
+//                 embedder: textEmbedding004,            
+//             }
+//         ])
+//     ],
+//     promptDir: './llm_prompts',
+//     model: gemini25FlashPreview0417// gemini20Flash,
+// });
 
 const chunkingConfig = {
     minLength: 1000,
@@ -201,12 +203,16 @@ export const promptFlow = ai.defineFlow(
         });
 
         // This is Dotprompt (see https://github.com/google/dotprompt)
-        const prompt = ai.prompt('tools_agent'); // .prompt extension will be added automatically
+        const prompt = ai.prompt('tools_agent'); // '.prompt' extension will be added automatically
         const promptResponse = await prompt({ // Full conversation turn with LLM here. After it completes, 'text' contains the response text
-            // Prompt input
-            input,
-            docs
-        }); 
+                // Prompt input
+                input,
+                docs: docs
+            },
+            {
+                tools: [getEvents]
+            }
+        ); 
         console.log("Response to prompt: ", promptResponse.text);
         return promptResponse;
     }
@@ -255,21 +261,6 @@ export const RAGFlow = ai.defineFlow(
         console.log("Tool requests: ", toolRequests);
 
         return llmResponse;
-    }
-);
- 
-const getEvents = ai.defineTool(
-    {
-        name: "eventsTool",
-        description: 'Gets the current events in a given location',
-        inputSchema: z.object({ 
-          location: z.string().describe('The location to get the current events for')
-        }),
-        outputSchema: z.string()
-    },
-    async (input, {context, interrupt, resumed}) => {
-        console.log('Input:', input);
-        return "List of events in " + input.location + ":\n Event 1\n, Event 2\n, Event 3.";
     }
 );
 
