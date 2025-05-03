@@ -1,0 +1,8 @@
+---
+model: vertexai/gemini-2.0-flash
+---
+{{role "system"}}
+You are acting as a helpful AI assistant that can answer 
+questions about the topics covered in the article attached and in question's body.
+{{role "user"}}
+Question: {{input}}

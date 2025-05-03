@@ -13,7 +13,9 @@ import {
     llama32,
     vertexAIModelGarden,
   } from '@genkit-ai/vertexai/modelgarden';
-import { Document } from 'genkit/retriever';
+// import { cohereReranker, cohere } from '@genkit-ai/cohere';
+import { Document, CommonRetrieverOptionsSchema } from 'genkit/retriever';
+// import { RankedDocument, CommonRerankerOptionsSchema } from 'genkit/reranker';
 import { logger } from 'genkit/logging';
 import { chunk } from 'llm-chunk';
 import { startFlowServer } from '@genkit-ai/express';
@@ -26,10 +28,15 @@ dotenv.config();
 console.log("Hello from Genkit!");
 
 async function extractTextFromPdf(filePath: string) {
-    const pdfFile = path.resolve(filePath);
-    const dataBuffer = await readFile(pdfFile);
-    const data = await pdf(dataBuffer);
-    return data.text;
+    try {
+        const pdfFile = path.resolve(filePath);
+        const dataBuffer = await readFile(pdfFile);
+        const data = await pdf(dataBuffer);
+        return data.text;
+    } catch (error) {
+        logger.error('Error extracting text from PDF:', error);
+        throw error;
+    }
 }
 
 logger.setLogLevel('debug');
@@ -52,6 +59,7 @@ const ai = genkit({
             }
         ])
     ],
+    promptDir: './llm_prompts',
     model: gemini25FlashPreview0417// gemini20Flash,
 });
 
@@ -65,6 +73,84 @@ const chunkingConfig = {
 
 const menuPdfIndexer = devLocalIndexerRef('menuQA')  
 const menuRetriever = devLocalRetrieverRef('menuQA')
+
+const igReranker = ai.defineReranker(
+    {
+      name: 'custom/reranker',
+      configSchema: z.object({
+        k: z.number().optional(),
+      }),
+    },
+    async (query, documents, options) => {
+
+        const queryText = query.text?.toLowerCase() || '';
+        logger.info(`Retriever received query: ${queryText}`);
+
+        // 1. Extract keywords from the query (simple split by space).
+        const queryKeywords = new Set(queryText.split(/\s+/).filter(Boolean)); // Get unique keywords
+
+        const rerankedDocs = documents.map((doc) => {
+            // 2. For each document, count how many query keywords appear in its content.
+            const docText = doc.text?.toLowerCase() || '';
+            let score = 0;
+            queryKeywords.forEach(keyword => {
+                if (docText.includes(keyword)) {
+                    // 3. Assign the count as the score.
+                    score++;
+                }
+            });
+
+            return {
+                ...doc,
+                metadata: { ...doc.metadata, score },
+            };
+        });
+
+        const sortedDocs = rerankedDocs
+                                .sort((a, b) => b.metadata.score - a.metadata.score)
+                                .slice(0, options.k || 3);
+        return {
+            documents: sortedDocs,
+        };
+    }
+  );
+ 
+const advancedMenuRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
+    // 'k' is already in CommonRetrieverOptionsSchema, but you could add others:
+    preRerankK: z.number().max(1000).optional().describe("Number of documents to retrieve before potential reranking"),
+    customFilter: z.string().optional().describe("A custom filter string"),
+});
+
+const advancedRetriever = ai.defineRetriever({
+        name: 'custom/advancedRetriever',
+        info: { label: 'Configurable Retriever' },
+        configSchema: advancedMenuRetrieverOptionsSchema,
+    }, async( query: Document, options: z.infer<typeof advancedMenuRetrieverOptionsSchema> ) => {
+        
+        logger.info(`Retriever received query: ${query.text}`);
+
+        const initialK = options.preRerankK || 10; // Default to 10 if not provided
+        const finalK = options.k ?? 3; // Default final number of docs to 3 if k is not set
+        
+        const docs = await ai.retrieve({ // kNN or ANN inside
+            retriever: menuRetriever,
+            query: query,
+            options: {
+                k: initialK
+            }
+        });
+
+        const rerankedDocs = await ai.rerank({
+            reranker: igReranker,
+            query: query,
+            documents: docs,
+            options:  { k: finalK }
+        });
+
+        return {
+            documents: rerankedDocs
+        };
+    });
 
 const indexFlow = ai.defineFlow({
         name: "indexFlow",
@@ -96,36 +182,98 @@ const indexFlow = ai.defineFlow({
     }
 );
 
+export const promptFlow = ai.defineFlow(
+    {
+        name: "promptFlow",
+        inputSchema: z.string().describe("Prompt input"),
+    },
+    async (input: string) => {
+
+        // retrieve relevant documents. Uses kNN internally, then re-ranks the retrieved docs
+        const docs = await ai.retrieve({
+            retriever: advancedRetriever, //use the custom retriever
+            query: input,
+            options: {
+                k: 3,
+                preRerankK: 10,
+                customFilter: "words count > 5",
+            }
+        });
+
+        // This is Dotprompt (see https://github.com/google/dotprompt)
+        const prompt = ai.prompt('tools_agent'); // .prompt extension will be added automatically
+        const promptResponse = await prompt({ // Full conversation turn with LLM here. After it completes, 'text' contains the response text
+            // Prompt input
+            input,
+            docs
+        }); 
+        console.log("Response to prompt: ", promptResponse.text);
+        return promptResponse;
+    }
+)
+
 export const RAGFlow = ai.defineFlow(
     {
         name: "RAGFlow",
-        inputSchema: z.string(),
+        inputSchema: z.string(),        
     },
     async (input: string) => {
-        
-        // retrieve relevant documents
+
+        // const prompt = ai.prompt('tools_agent');
+        // const promptResponse = await prompt({ // Full conversation turn with LLM here. After it completes, 'text' contains the response text
+        //     // Prompt input
+        //     input,
+        // }); 
+        // console.log("Response to prompt: ", promptResponse.text);
+
+        // retrieve relevant documents. Uses kNN internally, then re-ranks the retrieved docs
         const docs = await ai.retrieve({
-            retriever: menuRetriever,
+            retriever: advancedRetriever, //use the custom retriever
             query: input,
-            options: { k : 3 }
+            options: {
+                k: 3,
+                preRerankK: 10,
+                customFilter: "words count > 5",
+            }
         });
 
         // generate a response
-        const text =  ai.generate({
-            model: gemini25FlashPreview0417, // llama32, //gemini20Flash,
-            prompt: `
-                You are acting as a helpful AI assistant that can answer 
-                questions about the topic covered in the article attached.
+        const llmResponse =  ai.generate({
+            tools: [getEvents],
+            // returnToolRequests: true,
+            // prompt: `
+            //     You are acting as a helpful AI assistant that can answer 
+            //     questions about the topic covered in the article attached and in question's body.
 
-                Question: ${input}`,
+            //     Question: ${input}`,
+            prompt: `
+                Question: ${input}`,                
             docs
         });
 
-        return text;
+        const toolRequests = (await llmResponse).toolRequests;
+        console.log("Tool requests: ", toolRequests);
+
+        return llmResponse;
+    }
+);
+ 
+const getEvents = ai.defineTool(
+    {
+        name: "eventsTool",
+        description: 'Gets the current events in a given location',
+        inputSchema: z.object({ 
+          location: z.string().describe('The location to get the current events for')
+        }),
+        outputSchema: z.string()
+    },
+    async (input, {context, interrupt, resumed}) => {
+        console.log('Input:', input);
+        return "List of events in " + input.location + ":\n Event 1\n, Event 2\n, Event 3.";
     }
 );
 
 startFlowServer({
-    flows: [RAGFlow, indexFlow],
+    flows: [RAGFlow, indexFlow, promptFlow],
     port: 3400,
 });
