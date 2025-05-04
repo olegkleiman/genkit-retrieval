@@ -94,6 +94,31 @@ const hybridReranker = ai.defineReranker(
             .sort((a, b) => (b.metadata?.score ?? 0) - (a.metadata?.score ?? 0))
             .slice(0, options.k || 3);
 
+       // TODO: Use Reciprocal Rank Fusion - RRF
+        // --- Reciprocal Rank Fusion (RRF) ---
+        // see here: https://medium.com/@devalshah1619/mathematical-intuition-behind-reciprocal-rank-fusion-rrf-explained-in-2-mins-002df0cc5e2a
+
+        const rrfConstant = 60; // Common value for k in RRF
+        const fusedDocs = Array.from(merged.values())
+        .map( doc => {
+            let rrfScore = 0;
+            console.log(doc)
+
+            const metadata = doc.metadata;
+
+            // Add score based on dense rank (lower rank is better)
+            // if (metadata.denseScore !== undefined) {
+            //     rrfScore += 1 / (rrfConstant + metadata.denseScore);
+            // }
+        //     // Add score based on sparse rank (lower rank is better)
+        //     if (item.sparseRank !== undefined) {
+        //         rrfScore += 1 / (rrfConstant + item.sparseRank);
+        //     }
+        //     // Add the RRF score to the document's metadata
+        //     item.doc.metadata = { ...(item.doc.metadata || {}), rrfScore };
+            return doc
+        });
+
         return { documents: topK }; 
   });
  
