@@ -78,34 +78,17 @@ const hybridReranker = ai.defineReranker(
         const alpha = options.alpha ?? 0.5
 
         // --- Compute final hybrid score and sort ---
-        const merged = Array.from(documents).map((doc) => {
-        const hybridScore = alpha * doc.metadata?.denseScore + (1 - alpha) * doc.metadata?.sparseScore;
-        return {
-                ...doc,
-                metadata: {
-                    ...doc.metadata,
-                    score: hybridScore, // Add the required 'score' property
-                },
-            };
+        const merged = Array.from(documents)
+        .map((doc) => {
+            const hybridScore = alpha * doc.metadata?.denseScore + (1 - alpha) * doc.metadata?.sparseScore;
+            return {
+                    ...doc,
+                    metadata: {
+                        ...doc.metadata,
+                        score: hybridScore
+                    },
+                };
         });
-
-          // TODO: Use Reciprocal Rank Fusion - RRF
-        // --- Reciprocal Rank Fusion (RRF) ---
-        // const rrfConstant = 60; // Common value for k in RRF
-        // const fusedDocs = Array.from(allDocsMap.values()).map(item => {
-        //     let rrfScore = 0;
-        //     // Add score based on dense rank (lower rank is better)
-        //     if (item.denseRank !== undefined) {
-        //         rrfScore += 1 / (rrfConstant + item.denseRank);
-        //     }
-        //     // Add score based on sparse rank (lower rank is better)
-        //     if (item.sparseRank !== undefined) {
-        //         rrfScore += 1 / (rrfConstant + item.sparseRank);
-        //     }
-        //     // Add the RRF score to the document's metadata
-        //     item.doc.metadata = { ...(item.doc.metadata || {}), rrfScore };
-        //     return item.doc;
-        // });
 
         const topK = merged
             .sort((a, b) => (b.metadata?.score ?? 0) - (a.metadata?.score ?? 0))
