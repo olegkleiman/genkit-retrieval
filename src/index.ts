@@ -1,7 +1,9 @@
 // from https://firebase.google.com/docs/genkit/rag
 
-import { googleAI, gemini20Flash, gemini25FlashPreview0417 } from '@genkit-ai/googleai';
+import crypto from 'crypto';
+import { googleAI } from '@genkit-ai/googleai';
 import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
+
 import { genkit, z } from 'genkit/beta';
 import { 
     devLocalIndexerRef, 
@@ -28,6 +30,10 @@ dotenv.config();
 import { getEvents } from './tools';
 import { ai } from './genkit';
 
+const getHash = (text: string): string => {
+    return crypto.createHash('sha256').update(text).digest('hex');
+}
+
 async function extractTextFromPdf(filePath: string) {
     try {
         const pdfFile = path.resolve(filePath);
@@ -45,108 +51,183 @@ logger.debug("Hello from Genkit!");
 
 googleAI({ apiKey: process.env.GOOGLE_API_KEY });
 
-// const ai = genkit({
-
-//     plugins: [
-//         googleAI(),
-//         // vertexAIModelGarden({
-//         //     location: 'us-central1',
-//         //     models: [llama32]
-//         // }),
-//         vertexAI(), 
-//         devLocalVectorstore([
-//             {
-//                 indexName: 'menuQA',
-//                 embedder: textEmbedding004,            
-//             }
-//         ])
-//     ],
-//     promptDir: './llm_prompts',
-//     model: gemini25FlashPreview0417// gemini20Flash,
-// });
-
 const chunkingConfig = {
     minLength: 1000,
     maxLength: 2000,
     splitter: 'sentence',
-    overlap: 100,
-    delimiters: '',
+    overlap: 0,  // number of overlap chracters
+    delimiters: '', // regex for base split method
   } as any;
 
-const menuPdfIndexer = devLocalIndexerRef('menuQA')  
-const menuRetriever = devLocalRetrieverRef('menuQA')
+const pdfIndexer = devLocalIndexerRef('menuQA')  
+const devLocalRetriever = devLocalRetrieverRef('menuQA')
 
-const igReranker = ai.defineReranker(
+const hybridReranker = ai.defineReranker(
     {
       name: 'custom/reranker',
       configSchema: z.object({
         k: z.number().optional(),
+        alpha: z.number().optional(),
       }),
     },
     async (query, documents, options) => {
 
         const queryText = query.text?.toLowerCase() || '';
-        logger.info(`Retriever received query: ${queryText}`);
+        logger.info(`Re-ranker received query: ${queryText}`);
 
-        // 1. Extract keywords from the query (simple split by space).
-        const queryKeywords = new Set(queryText.split(/\s+/).filter(Boolean)); // Get unique keywords
+        const alpha = options.alpha ?? 0.5
 
-        const rerankedDocs = documents.map((doc) => {
-            // 2. For each document, count how many query keywords appear in its content.
-            const docText = doc.text?.toLowerCase() || '';
-            let score = 0;
-            queryKeywords.forEach(keyword => {
-                if (docText.includes(keyword)) {
-                    // 3. Assign the count as the score.
-                    score++;
-                }
-            });
-
-            return {
+        // --- Compute final hybrid score and sort ---
+        const merged = Array.from(documents).map((doc) => {
+        const hybridScore = alpha * doc.metadata?.denseScore + (1 - alpha) * doc.metadata?.sparseScore;
+        return {
                 ...doc,
-                metadata: { ...doc.metadata, score },
+                metadata: {
+                    ...doc.metadata,
+                    score: hybridScore, // Add the required 'score' property
+                },
             };
         });
 
-        const sortedDocs = rerankedDocs
-                                .sort((a, b) => b.metadata.score - a.metadata.score)
-                                .slice(0, options.k || 3);
-        return {
-            documents: sortedDocs,
-        };
-    }
-  );
+          // TODO: Use Reciprocal Rank Fusion - RRF
+        // --- Reciprocal Rank Fusion (RRF) ---
+        // const rrfConstant = 60; // Common value for k in RRF
+        // const fusedDocs = Array.from(allDocsMap.values()).map(item => {
+        //     let rrfScore = 0;
+        //     // Add score based on dense rank (lower rank is better)
+        //     if (item.denseRank !== undefined) {
+        //         rrfScore += 1 / (rrfConstant + item.denseRank);
+        //     }
+        //     // Add score based on sparse rank (lower rank is better)
+        //     if (item.sparseRank !== undefined) {
+        //         rrfScore += 1 / (rrfConstant + item.sparseRank);
+        //     }
+        //     // Add the RRF score to the document's metadata
+        //     item.doc.metadata = { ...(item.doc.metadata || {}), rrfScore };
+        //     return item.doc;
+        // });
+
+        const topK = merged
+            .sort((a, b) => (b.metadata?.score ?? 0) - (a.metadata?.score ?? 0))
+            .slice(0, options.k || 3);
+
+        return { documents: topK }; 
+  });
  
-const advancedMenuRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
+const keywordScoreRetriever = ai.defineRetriever({
+        name: 'custom/sparseRetriever',
+        info: { label: 'Sparse (Keyword Scored) Retriever' },
+        },
+        async (query: Document, options: z.infer<typeof CommonRetrieverOptionsSchema>) => {
+            logger.info(`Sparse Retriever received query: ${query.text}`);
+
+            const k = options?.k ?? 10;
+
+            // const docs = await bm25KeywordMatch(query, options?.k ?? 10);
+            const allDocs = await ai.retrieve({
+                retriever: devLocalRetriever,
+                query,
+                options: { k }
+            });
+            const queryKeywords = new Set(query.text?.split(/\s+/));
+
+            const matchDocs = allDocs
+                .map((doc) => {
+                const text = doc.text || '';
+    
+                const matchScore = Array.from(queryKeywords).reduce((acc, word) => acc + (text.includes(word) ? 1 : 0), 0);
+    
+                // Create a valid Document instance
+                // TODO: use spray operator here, i.g. return { ...doc, id: <>, matchScore: <>}
+                return Document.fromText(text, 
+                    {
+                        ...(doc.metadata || {}),
+                        id: getHash(text),
+                        matchScore,
+                    });
+            })
+            .sort((a, b) => (b.metadata?.matchScore ?? 0) - (a.metadata?.matchScore ?? 0))
+            .slice(0, k);
+
+            return {
+                documents: matchDocs
+            }
+        }
+)
+
+const hybridRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
     // 'k' is already in CommonRetrieverOptionsSchema, but you could add others:
     preRerankK: z.number().max(1000).optional().describe("Number of documents to retrieve before potential reranking"),
     customFilter: z.string().optional().describe("A custom filter string"),
+    alpha: z.number()
 });
 
-const advancedRetriever = ai.defineRetriever({
-        name: 'custom/advancedRetriever',
-        info: { label: 'Configurable Retriever' },
-        configSchema: advancedMenuRetrieverOptionsSchema,
-    }, async( query: Document, options: z.infer<typeof advancedMenuRetrieverOptionsSchema> ) => {
+const hybridRetriever = ai.defineRetriever({
+        name: 'custom/hybridRetriever',
+        info: { label: 'Hybrid Retriever (dense + sparse)' },
+        configSchema: hybridRetrieverOptionsSchema,
+    }, async( query: Document, options: z.infer<typeof hybridRetrieverOptionsSchema> ) => {
         
-        logger.info(`Retriever received query: ${query.text}`);
+        logger.info(`Hybrid Retriever received query: ${query.text}`);
 
         const initialK = options.preRerankK || 10; // Default to 10 if not provided
         const finalK = options.k ?? 3; // Default final number of docs to 3 if k is not set
+        const alpha = options.alpha ?? 0.5; // balance: 0.5 = equal weight
         
-        const docs = await ai.retrieve({ // kNN or ANN inside
-            retriever: menuRetriever,
+        // --- Merge & Deduplicate Results ---
+        // Use a Map to store unique documents by content hash
+        // Assign scores from both retrieval methods.        
+        const allDocsMap = new Map<string, 
+            { 
+                doc: Document; 
+                denseScore?: number; 
+                sparseScore?: number 
+           }>();
+
+        // --- Dense retrieval from vector store
+        const denseDocs = await ai.retrieve({ // kNN or ANN inside
+            retriever: devLocalRetriever,
             query: query,
-            options: {
-                k: initialK
-            }
+            options: { k: initialK }
+        });
+        denseDocs.forEach((doc, i) => {
+            const docHash = getHash(doc.text);
+            // Assign a simple rank-based score (higher rank = higher score)
+            allDocsMap.set(docHash, { doc, denseScore: initialK - i });
+        });        
+
+        // --- Sparse retrieval
+        const sparseDocs = await ai.retrieve({
+            retriever: keywordScoreRetriever,
+            query: query,
+            options: { k: initialK }
+        });
+        sparseDocs.forEach((doc, i) => {
+                const docHash = getHash(doc.text);
+                const existingDoc = allDocsMap.get(docHash);
+                if (existingDoc) {
+                    existingDoc.sparseScore = initialK - i;
+                } else {
+                    allDocsMap.set(docHash, { doc, sparseScore: initialK - i });
+                }
         });
 
+        const combinedDocsWithScores = Array.from(allDocsMap.values())
+            .map(({ doc, denseScore, sparseScore }) => 
+            {
+                doc.metadata = {
+                    ...doc.metadata || {},
+                    denseScore: denseScore ?? 0,
+                    sparseScore: sparseScore ?? 0,
+                }
+                return doc;
+            });
+
         const rerankedDocs = await ai.rerank({
-            reranker: igReranker,
+            reranker: hybridReranker,
             query: query,
-            documents: docs,
-            options:  { k: finalK }
+            documents: combinedDocsWithScores,
+            options:  { k: finalK, alpha: alpha }
         });
 
         return {
@@ -173,17 +254,24 @@ const indexFlow = ai.defineFlow({
 
         // Convert chunks of text into documents to store in the index.
         const documents = chunks.map((text) => {
-                return Document.fromText(text, { filePath });
+            return Document.fromText(text, 
+                { 
+                    id: getHash(text),
+                    filePath 
+                });
         });
 
         // Add documents to the index.
-        await ai.index({
-            indexer: menuPdfIndexer,
+        const index = await ai.index({
+            indexer: pdfIndexer,
             documents
         });
     }
 );
 
+//
+// Tools can be used on ai.prompt just like in ai.generate()
+//
 export const promptFlow = ai.defineFlow(
     {
         name: "promptFlow",
@@ -193,11 +281,12 @@ export const promptFlow = ai.defineFlow(
 
         // retrieve relevant documents. Uses kNN internally, then re-ranks the retrieved docs
         const docs = await ai.retrieve({
-            retriever: advancedRetriever, //use the custom retriever
+            retriever: hybridRetriever, //use the custom retriever
             query: input,
             options: {
                 k: 3,
                 preRerankK: 10,
+                alpha: 0.7,
                 customFilter: "words count > 5",
             }
         });
@@ -234,11 +323,12 @@ export const RAGFlow = ai.defineFlow(
 
         // retrieve relevant documents. Uses kNN internally, then re-ranks the retrieved docs
         const docs = await ai.retrieve({
-            retriever: advancedRetriever, //use the custom retriever
+            retriever: hybridRetriever, //use the custom retriever
             query: input,
             options: {
                 k: 3,
                 preRerankK: 10,
+                alpha: 0.7,
                 customFilter: "words count > 5",
             }
         });
