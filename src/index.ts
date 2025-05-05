@@ -64,64 +64,43 @@ const devLocalRetriever = devLocalRetrieverRef('menuQA')
 
 const hybridReranker = ai.defineReranker(
     {
-      name: 'custom/reranker',
-      configSchema: z.object({
-        k: z.number().optional(),
-        alpha: z.number().optional(),
-      }),
+        name: "custom/reranker"
     },
-    async (query, documents, options) => {
+    async(query, documents, options) => {
 
-        const queryText = query.text?.toLowerCase() || '';
-        logger.info(`Re-ranker received query: ${queryText}`);
-
-        const alpha = options.alpha ?? 0.5
-
-        // --- Compute final hybrid score and sort ---
-        const merged = Array.from(documents)
-        .map((doc) => {
-            const hybridScore = alpha * doc.metadata?.denseScore + (1 - alpha) * doc.metadata?.sparseScore;
-            return {
-                    ...doc,
-                    metadata: {
-                        ...doc.metadata,
-                        score: hybridScore
-                    },
-                };
-        });
-
-        const topK = merged
-            .sort((a, b) => (b.metadata?.score ?? 0) - (a.metadata?.score ?? 0))
-            .slice(0, options.k || 3);
-
-       // TODO: Use Reciprocal Rank Fusion - RRF
         // --- Reciprocal Rank Fusion (RRF) ---
         // see here: https://medium.com/@devalshah1619/mathematical-intuition-behind-reciprocal-rank-fusion-rrf-explained-in-2-mins-002df0cc5e2a
 
         const rrfConstant = 60; // Common value for k in RRF
-        const fusedDocs = Array.from(merged.values())
-        .map( doc => {
-            let rrfScore = 0;
-            console.log(doc)
 
-            const metadata = doc.metadata;
+        const fusedDocs = documents.map(doc => {
+
+            let rrfScore = 0;
 
             // Add score based on dense rank (lower rank is better)
-            // if (metadata.denseScore !== undefined) {
-            //     rrfScore += 1 / (rrfConstant + metadata.denseScore);
-            // }
-        //     // Add score based on sparse rank (lower rank is better)
-        //     if (item.sparseRank !== undefined) {
-        //         rrfScore += 1 / (rrfConstant + item.sparseRank);
-        //     }
-        //     // Add the RRF score to the document's metadata
-        //     item.doc.metadata = { ...(item.doc.metadata || {}), rrfScore };
-            return doc
-        });
+            rrfScore += 1 / (rrfConstant + doc.metadata?.denseRank);
+            // Add score based on sparse rank (lower rank is better)
+            rrfScore += 1 / (rrfConstant + doc.metadata?.sparseRank);            
 
-        return { documents: topK }; 
-  });
- 
+            return {
+                ...doc,
+                metadata: {
+                    score: rrfScore,
+                    ...doc.metadata
+                }
+            };
+        })
+
+        const topK = fusedDocs
+            .sort((a, b) => (b.metadata.score ?? 0) - (a.metadata.score ?? 0))
+            .slice(0, options?.k || 3);
+
+        return {
+            documents: topK 
+        }
+    }
+)
+
 const keywordScoreRetriever = ai.defineRetriever({
         name: 'custom/sparseRetriever',
         info: { label: 'Sparse (Keyword Scored) Retriever' },
@@ -131,7 +110,7 @@ const keywordScoreRetriever = ai.defineRetriever({
 
             const k = options?.k ?? 10;
 
-            // const docs = await bm25KeywordMatch(query, options?.k ?? 10);
+            // Fetch initial dense results
             const allDocs = await ai.retrieve({
                 retriever: devLocalRetriever,
                 query,
@@ -143,6 +122,7 @@ const keywordScoreRetriever = ai.defineRetriever({
                 .map((doc) => {
                 const text = doc.text || '';
     
+                // Calculate simple keyword overlap score
                 const matchScore = Array.from(queryKeywords).reduce((acc, word) => acc + (text.includes(word) ? 1 : 0), 0);
     
                 // Create a valid Document instance
@@ -167,7 +147,6 @@ const hybridRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
     // 'k' is already in CommonRetrieverOptionsSchema, but you could add others:
     preRerankK: z.number().max(1000).optional().describe("Number of documents to retrieve before potential reranking"),
     customFilter: z.string().optional().describe("A custom filter string"),
-    alpha: z.number()
 });
 
 const hybridRetriever = ai.defineRetriever({
@@ -180,7 +159,6 @@ const hybridRetriever = ai.defineRetriever({
 
         const initialK = options.preRerankK || 10; // Default to 10 if not provided
         const finalK = options.k ?? 3; // Default final number of docs to 3 if k is not set
-        const alpha = options.alpha ?? 0.5; // balance: 0.5 = equal weight
         
         // --- Merge & Deduplicate Results ---
         // Use a Map to store unique documents by content hash
@@ -188,8 +166,8 @@ const hybridRetriever = ai.defineRetriever({
         const allDocsMap = new Map<string, 
             { 
                 doc: Document; 
-                denseScore?: number; 
-                sparseScore?: number 
+                denseRank?: number; 
+                sparseRank?: number 
            }>();
 
         // --- Dense retrieval from vector store
@@ -198,10 +176,11 @@ const hybridRetriever = ai.defineRetriever({
             query: query,
             options: { k: initialK }
         });
+        // Actual relevance scores aren't readily available
         denseDocs.forEach((doc, i) => {
             const docHash = getHash(doc.text);
             // Assign a simple rank-based score (higher rank = higher score)
-            allDocsMap.set(docHash, { doc, denseScore: initialK - i });
+            allDocsMap.set(docHash, { doc, denseRank: i });
         });        
 
         // --- Sparse retrieval
@@ -214,19 +193,19 @@ const hybridRetriever = ai.defineRetriever({
                 const docHash = getHash(doc.text);
                 const existingDoc = allDocsMap.get(docHash);
                 if (existingDoc) {
-                    existingDoc.sparseScore = initialK - i;
+                    existingDoc.sparseRank = i;
                 } else {
-                    allDocsMap.set(docHash, { doc, sparseScore: initialK - i });
+                    allDocsMap.set(docHash, { doc, sparseRank: i });
                 }
         });
 
         const combinedDocsWithScores = Array.from(allDocsMap.values())
-            .map(({ doc, denseScore, sparseScore }) => 
+            .map(({ doc, denseRank, sparseRank }) => 
             {
                 doc.metadata = {
                     ...doc.metadata || {},
-                    denseScore: denseScore ?? 0,
-                    sparseScore: sparseScore ?? 0,
+                    denseRank: denseRank ?? 0,
+                    sparseRank: sparseRank ?? 0,
                 }
                 return doc;
             });
@@ -235,7 +214,7 @@ const hybridRetriever = ai.defineRetriever({
             reranker: hybridReranker,
             query: query,
             documents: combinedDocsWithScores,
-            options:  { k: finalK, alpha: alpha }
+            options:  { k: finalK }
         });
 
         return {
@@ -294,7 +273,6 @@ export const promptFlow = ai.defineFlow(
             options: {
                 k: 3,
                 preRerankK: 10,
-                alpha: 0.7,
                 customFilter: "words count > 5",
             }
         });
@@ -336,7 +314,6 @@ export const RAGFlow = ai.defineFlow(
             options: {
                 k: 3,
                 preRerankK: 10,
-                alpha: 0.7,
                 customFilter: "words count > 5",
             }
         });
