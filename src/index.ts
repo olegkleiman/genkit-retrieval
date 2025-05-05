@@ -62,6 +62,10 @@ const chunkingConfig = {
 const pdfIndexer = devLocalIndexerRef('menuQA')  
 const devLocalRetriever = devLocalRetrieverRef('menuQA')
 
+// The fundamental purpose of a re-ranker is to re-order the list of documents
+// based on their relevance to the specific query.
+// In the case of RRF-ranking, however, the re-ordiring is based on pre-calculated ranks
+// and, hence, 'query' parameter is not used
 const hybridReranker = ai.defineReranker(
     {
         name: "custom/reranker"
