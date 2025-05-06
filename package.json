@@ -7,7 +7,10 @@
     "start": "node --watch tsx src/index.ts",
     "devui": "npx genkit start -- npm run dev"
   },
-  "keywords": [],
+  "keywords": [
+    "Semantic Search",
+    "Hybrid Search"
+  ],
   "author": "",
   "license": "ISC",
   "description": "",
@@ -20,7 +23,9 @@
     "dotenv": "^16.5.0",
     "genkit": "^1.7.0",
     "llm-chunk": "^0.0.1",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "redis": "^5.0.1",
+    "wink-bm25-text-search": "^3.1.2"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.5",
