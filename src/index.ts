@@ -2,9 +2,9 @@
 
 import crypto from 'crypto';
 import { googleAI } from '@genkit-ai/googleai';
-import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
 
-import { genkit, z } from 'genkit/beta';
+import { z } from 'genkit/beta';
+
 import { 
     devLocalIndexerRef, 
     devLocalRetrieverRef,
@@ -15,15 +15,16 @@ import {
     llama32,
     vertexAIModelGarden,
   } from '@genkit-ai/vertexai/modelgarden';
-// import { cohereReranker, cohere } from '@genkit-ai/cohere';
 import { Document, CommonRetrieverOptionsSchema } from 'genkit/retriever';
 // import { RankedDocument, CommonRerankerOptionsSchema } from 'genkit/reranker';
 import { logger } from 'genkit/logging';
+import { BM25Engine} from './bm25Store';
 import { chunk } from 'llm-chunk';
 import { startFlowServer } from '@genkit-ai/express';
 import path from 'path';
 import { readFile } from 'fs/promises';
 import pdf from 'pdf-parse';
+import fs from 'fs';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -48,6 +49,8 @@ async function extractTextFromPdf(filePath: string) {
 
 logger.setLogLevel('debug');
 logger.debug("Hello from Genkit!");
+
+const bm25EngineInstance = BM25Engine.getInstance();
 
 googleAI({ apiKey: process.env.GOOGLE_API_KEY });
 
@@ -105,6 +108,32 @@ const hybridReranker = ai.defineReranker(
     }
 )
 
+const bm25Retriever = ai.defineRetriever(
+    {
+        name: 'custom/bm25Retriever',
+        info: { label: 'Sparse (BM25) Retriever' },
+    },
+    async(query: Document, options: z.infer<typeof CommonRetrieverOptionsSchema>) => {
+        logger.info(`Sparse Retriever received query: ${query.text}`);
+
+        bm25EngineInstance.fromStore('bm25-index.json');
+        
+        const results = await bm25EngineInstance.search(query.text)
+
+        const docs = results.map( res => {
+            return Document.fromText(res.text, 
+                        {
+                            score: res.score
+                        }
+            )
+        })
+
+        return {
+            documents: docs
+        }
+    }
+)
+
 const keywordScoreRetriever = ai.defineRetriever({
         name: 'custom/sparseRetriever',
         info: { label: 'Sparse (Keyword Scored) Retriever' },
@@ -120,6 +149,7 @@ const keywordScoreRetriever = ai.defineRetriever({
                 query,
                 options: { k }
             });
+
             const queryKeywords = new Set(query.text?.split(/\s+/));
 
             const matchDocs = allDocs
@@ -127,7 +157,7 @@ const keywordScoreRetriever = ai.defineRetriever({
                 const text = doc.text || '';
     
                 // Calculate simple keyword overlap score
-                const matchScore = Array.from(queryKeywords).reduce((acc, word) => acc + (text.includes(word) ? 1 : 0), 0);
+                const score = Array.from(queryKeywords).reduce((acc, word) => acc + (text.includes(word) ? 1 : 0), 0);
     
                 // Create a valid Document instance
                 // TODO: use spray operator here, i.g. return { ...doc, id: <>, matchScore: <>}
@@ -135,10 +165,10 @@ const keywordScoreRetriever = ai.defineRetriever({
                     {
                         ...(doc.metadata || {}),
                         id: getHash(text),
-                        matchScore,
+                        score,
                     });
             })
-            .sort((a, b) => (b.metadata?.matchScore ?? 0) - (a.metadata?.matchScore ?? 0))
+            .sort((a, b) => (b.metadata?.score ?? 0) - (a.metadata?.score ?? 0))
             .slice(0, k);
 
             return {
@@ -189,7 +219,7 @@ const hybridRetriever = ai.defineRetriever({
 
         // --- Sparse retrieval
         const sparseDocs = await ai.retrieve({
-            retriever: keywordScoreRetriever,
+            retriever: bm25Retriever, // keywordScoreRetriever,
             query: query,
             options: { k: initialK }
         });
@@ -252,10 +282,22 @@ const indexFlow = ai.defineFlow({
                 });
         });
 
-        // Add documents to the index.
-        const index = await ai.index({
+        // Actually generate embedding of each document 
+        // an store this embedding (along with doc's metadata) into 'devLocalVestorStore'
+        await ai.index({
             indexer: pdfIndexer,
             documents
+        });
+
+        const bm25Docs = chunks.map( _chunk => {
+            return {
+                id: getHash(_chunk),
+                text: _chunk,
+                originalFilePath: filePath
+            }
+        });
+        ai.run('buid-bm25-index', async () => {
+            bm25EngineInstance.buildIndex(bm25Docs, 'bm25-index.json');
         });
     }
 );
@@ -297,6 +339,28 @@ export const promptFlow = ai.defineFlow(
     }
 )
 
+export const SearchFlow = ai.defineFlow(
+    {
+        name: "SearchFlow",
+        inputSchema: z.string(),        
+    },
+    async (input: string) => {
+
+        // retrieve relevant documents. Uses kNN internally, then re-rank the retrieved docs
+        const docs = await ai.retrieve({
+            retriever: hybridRetriever, //use the custom retriever
+            query: input,
+            options: {
+                k: 3,
+                preRerankK: 10,
+                customFilter: "words count > 5",
+            }
+        });
+
+        return docs;
+    }
+)
+
 export const RAGFlow = ai.defineFlow(
     {
         name: "RAGFlow",
@@ -311,28 +375,21 @@ export const RAGFlow = ai.defineFlow(
         // }); 
         // console.log("Response to prompt: ", promptResponse.text);
 
-        // retrieve relevant documents. Uses kNN internally, then re-ranks the retrieved docs
-        const docs = await ai.retrieve({
-            retriever: hybridRetriever, //use the custom retriever
-            query: input,
-            options: {
-                k: 3,
-                preRerankK: 10,
-                customFilter: "words count > 5",
-            }
-        });
+        // Run SearchFlow - RAG step
+        const docs = await SearchFlow(input);
 
         // generate a response
         const llmResponse =  ai.generate({
             tools: [getEvents],
             // returnToolRequests: true,
-            // prompt: `
-            //     You are acting as a helpful AI assistant that can answer 
-            //     questions about the topic covered in the article attached and in question's body.
-
-            //     Question: ${input}`,
             prompt: `
-                Question: ${input}`,                
+                You are an AI assistant. Answer the following question based ONLY on the provided context documents.
+                If the answer is not found in the documents, state that you cannot answer based on the provided context.
+
+                Context Documents:\n---\n{{#docs}}{{content.text}}\n---\n{{/docs}}
+                Question: ${input}`,
+            // prompt: `
+            //     Question: ${input}`,                
             docs
         });
 
@@ -344,6 +401,6 @@ export const RAGFlow = ai.defineFlow(
 );
 
 startFlowServer({
-    flows: [RAGFlow, indexFlow, promptFlow],
+    flows: [SearchFlow, RAGFlow, indexFlow, promptFlow],
     port: 3400,
 });

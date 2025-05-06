@@ -1,3 +1,5 @@
 /node_modules
 /.env
 .genkit
+__db_menuQA.json
+bm25-index.json
