@@ -19,16 +19,22 @@
     "@genkit-ai/express": "^1.7.0",
     "@genkit-ai/googleai": "^1.7.0",
     "@genkit-ai/vertexai": "^1.7.0",
+    "@mozilla/readability": "^0.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "genkit": "^1.7.0",
+    "jsdom": "^26.1.0",
     "llm-chunk": "^0.0.1",
+    "node-fetch": "^3.3.2",
     "pdf-parse": "^1.1.1",
     "redis": "^5.0.1",
-    "wink-bm25-text-search": "^3.1.2"
+    "wink-bm25-text-search": "^3.1.2",
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
+    "@types/jsdom": "^21.1.7",
     "@types/pdf-parse": "^1.1.5",
+    "@types/xml2js": "^0.4.14",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3"

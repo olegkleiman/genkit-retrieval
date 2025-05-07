@@ -24,12 +24,17 @@ import { startFlowServer } from '@genkit-ai/express';
 import path from 'path';
 import { readFile } from 'fs/promises';
 import pdf from 'pdf-parse';
+import { JSDOM } from 'jsdom';
+import { Readability } from '@mozilla/readability';
 import fs from 'fs';
+import { Parser as XmlParser } from 'xml2js';
 import dotenv from 'dotenv';
 dotenv.config();
 
 import { getEvents } from './tools';
 import { ai } from './genkit';
+
+import { extractTextFromParsedXml } from '../retrievers/xmlRetriever';
 
 const getHash = (text: string): string => {
     return crypto.createHash('sha256').update(text).digest('hex');
@@ -107,6 +112,55 @@ const hybridReranker = ai.defineReranker(
         }
     }
 )
+
+export const htmlRetriever = ai.defineRetriever(
+    {
+        name: 'custom/htmlRetriever',
+        info: { label: 'HTML Content Retriever (expects URL as query text)' },
+    }, 
+    async (query: Document, options: z.infer<typeof CommonRetrieverOptionsSchema>) => {
+
+        const filePath = query.text; // Expecting file path in query.text()
+        const xmlFile = path.resolve(filePath);
+        const xmlData = await readFile(xmlFile, 'utf-8');
+        
+        const parser = new XmlParser({ explicitArray: false, explicitRoot: false });
+        const parsedXml = await parser.parseStringPromise(xmlData);
+
+        const docs = parsedXml.url.map( async (xmlNode:any) => {
+            
+            const url = xmlNode.loc;
+            try {
+                const response = await fetch(url);
+                const html = await response.text();
+
+                // Use JSDOM and Readability to extract main content
+                const dom = new JSDOM(html, { url }); // Providing the URL helps Readability resolve relative links if needed
+                const reader = new Readability(dom.window.document);
+                const article = reader.parse();
+
+                let textContent = '';
+                if (article && article.textContent) {
+                    textContent = article.textContent.replace(/\s\s+/g, ' ').trim(); // Clean up whitespace
+                } else {
+                    // Fallback: try to get text from body, might be less clean
+                    textContent = dom.window.document.body.textContent?.replace(/\s\s+/g, ' ').trim() || '';
+                    logger.warn(`Readability extraction might have been partial for ${url}, using fallback text extraction if main content is empty.`);
+                }
+
+                const document = Document.fromText(textContent, { source: url, title: article?.title ?? dom.window.document.title ?? 'Untitled Page' });
+                return { documents: [document] }; // Return as an array
+                
+            } catch(error) {
+                logger.error(`Error retrieving or parsing HTML from ${url}:`, error);
+            }
+        })
+
+        return {
+            documents: docs
+        }
+
+    })
 
 const bm25Retriever = ai.defineRetriever(
     {
@@ -204,6 +258,11 @@ const hybridRetriever = ai.defineRetriever({
                 denseRank?: number; 
                 sparseRank?: number 
            }>();
+
+           const _docs = await ai.retrieve({
+                retriever: htmlRetriever,
+                query: "sitemap.xml"
+           })
 
         // --- Dense retrieval from vector store
         const denseDocs = await ai.retrieve({ // kNN or ANN inside
