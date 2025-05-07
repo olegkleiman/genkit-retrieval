@@ -135,18 +135,6 @@ const bm25Retriever = ai.defineRetriever(
     }
 )
 
-export const htmlRetriever = ai.defineRetriever(
-    {
-        name: "custom/htmlRetriver"
-    },
-    async(query: Document, options: z.infer<typeof CommonRetrieverOptionsSchema>) => {
-        const url = query.text();
-
-        const document = Document.fromText(textContent, { source: url, title: article?.title || dom.window.document.title || 'Untitled Page' });
-        
-    }
-)
-
 const keywordScoreRetriever = ai.defineRetriever({
         name: 'custom/sparseRetriever',
         info: { label: 'Sparse (Keyword Scored) Retriever' },

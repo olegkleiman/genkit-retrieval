@@ -31,7 +31,7 @@ export interface DocumentCacheEntry {
 
 //const CACHE_EXPIRATION_SECONDS = 3600; // 1 hour, adjust as needed
 
-export async function getDocumentFromCache(docId: number): Promise<DocumentCacheEntry | null> {
+export async function getDocumentFromCache(docId: number) { // : Promise<DocumentCacheEntry | null> {
     try {
 
         if (!redisClient || !redisClient.isReady) {
@@ -39,13 +39,8 @@ export async function getDocumentFromCache(docId: number): Promise<DocumentCache
             return null;
         }
 
-        const cachedData = await redisClient.json.get(`doc:${docId}`) as DocumentCacheEntry | null;;
-        if( cachedData ) {
-            logger.debug(`Cache HIT for docId: ${docId}`);
-            return cachedData;
-        }
-
-        return null;
+        const cachedData = await redisClient.json.get(`doc:${docId}`);// as DocumentCacheEntry | null;;
+        return cachedData;
 
     } catch (error ) {
         logger.error(`Error getting document from Redis cache for docId ${docId}:`, error);

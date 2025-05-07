@@ -100,9 +100,15 @@ export class BM25Engine {
                 const docId = parseInt(String(res[0]), 10);
                 const score = parseFloat(String(res[1]));
 
-                const cachedDoc: DocumentCacheEntry | null = await getDocumentFromCache(docId);
-                if( cachedDoc ) {
-                    return { ...cachedDoc, score }
+                const cachedDoc = await getDocumentFromCache(docId);
+                const _cachedDoc = cachedDoc && typeof cachedDoc === 'string' ? JSON.parse(cachedDoc) : null;
+                if( _cachedDoc ) {
+                    const doc = {
+                        ..._cachedDoc,
+                        score
+                    }
+                    
+                    return doc;
                 }
 
                 return null;
