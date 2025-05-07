@@ -1,5 +1,6 @@
 const bm25 = require('wink-bm25-text-search'); // no types for this module available
-var nlp = require( 'wink-nlp-utils' );
+const nlp = require( 'wink-nlp-utils' );
+import { logger } from 'genkit/logging';
 import fs from 'fs';
 import { DocumentCacheEntry, setDocumentInCache, getDocumentFromCache } from './redisCache'
 
@@ -11,6 +12,7 @@ export class BM25Engine {
 
     private static instance: BM25Engine;
     private engine: any;
+    private isIndexLoaded: boolean = false;
 
     private pipe = [
         nlp.string.lowerCase,
@@ -41,23 +43,52 @@ export class BM25Engine {
         for (const [i, doc] of docs.entries()) {
             // Note, 'i' becomes the unique id for 'doc'
             this.engine.addDoc({ text: doc.text }, i);
-            await setDocumentInCache(i, doc);
+            try {
+                await setDocumentInCache(i, doc);
+            } catch(error) {
+                logger.error(`Error setting document in Redis cache for docId ${i}:`, error);
+            }
         }
+
         this.engine.consolidate();
+        logger.info('BM25 index consolidation complete.');
 
         const indexData = this.engine.exportJSON();
-
         fs.writeFileSync(storePath, JSON.stringify(indexData));
     }
 
-    fromStore(storePath: string) {
-        const savedData = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-        this.engine.importJSON(savedData);
-        // Crucial: Re-apply config and prep tasks after importing
-        this.applyConfigAndPrepTasks();
+    loadIndexFromStore(storePath: string): boolean {
+        if( this.isIndexLoaded )
+            return true;
+
+        if (!fs.existsSync(storePath)) {
+            logger.warn(`BM25 index file not found at ${storePath}. Engine will not be loaded.`);
+            this.isIndexLoaded = false;
+            return false;
+        }
+    
+        try
+        {
+            const savedData = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+            this.engine.importJSON(savedData);
+            // Crucial: Re-apply config and prep tasks after importing
+            this.applyConfigAndPrepTasks();
+
+            this.isIndexLoaded = true;
+            return true;
+        } catch(error) {
+            this.isIndexLoaded = false;
+            return false;
+        }
     }
 
     async search(query: string, limit: number = 10): Promise<BMScoredDocument[]> {
+
+        if (!this.isIndexLoaded) {
+            logger.warn('BM25Engine search called, but index is not loaded. Returning empty results.');
+            return [];
+        }
+
         // The engine.search() method returns [docInternalIndex, score].
         // The docInternalIndex is simply the 0-based order in which documents were added during engine.addDoc(doc, i).
         const results = this.engine.search(query, limit);

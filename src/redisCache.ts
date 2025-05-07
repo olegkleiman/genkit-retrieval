@@ -39,13 +39,12 @@ export async function getDocumentFromCache(docId: number): Promise<DocumentCache
             return null;
         }
 
-        const cachedData = await redisClient.json.get(`doc:${docId}`);
-        // const cachedData = await redisClient.get(`doc:${docId}`);
-        if (cachedData) {
-          return typeof cachedData === 'string' ? JSON.parse(cachedData) as DocumentCacheEntry : null;
+        const cachedData = await redisClient.json.get(`doc:${docId}`) as DocumentCacheEntry | null;;
+        if( cachedData ) {
+            logger.debug(`Cache HIT for docId: ${docId}`);
+            return cachedData;
         }
 
-        logger.debug(`Cache MISS for docId: ${docId}`);
         return null;
 
     } catch (error ) {

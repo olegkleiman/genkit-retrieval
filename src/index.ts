@@ -116,8 +116,10 @@ const bm25Retriever = ai.defineRetriever(
     async(query: Document, options: z.infer<typeof CommonRetrieverOptionsSchema>) => {
         logger.info(`Sparse Retriever received query: ${query.text}`);
 
-        bm25EngineInstance.fromStore('bm25-index.json');
-        
+        const loaded = bm25EngineInstance.loadIndexFromStore(process.env.BM25_STORE_NAME || "bm25-index.json");
+        if( !loaded ) 
+            return { documents: [] };
+
         const results = await bm25EngineInstance.search(query.text)
 
         const docs = results.map( res => {
@@ -128,9 +130,20 @@ const bm25Retriever = ai.defineRetriever(
             )
         })
 
-        return {
-            documents: docs
-        }
+        return { documents: docs }
+
+    }
+)
+
+export const htmlRetriever = ai.defineRetriever(
+    {
+        name: "custom/htmlRetriver"
+    },
+    async(query: Document, options: z.infer<typeof CommonRetrieverOptionsSchema>) => {
+        const url = query.text();
+
+        const document = Document.fromText(textContent, { source: url, title: article?.title || dom.window.document.title || 'Untitled Page' });
+        
     }
 )
 
@@ -297,7 +310,7 @@ const indexFlow = ai.defineFlow({
             }
         });
         ai.run('buid-bm25-index', async () => {
-            bm25EngineInstance.buildIndex(bm25Docs, 'bm25-index.json');
+            bm25EngineInstance.buildIndex(bm25Docs, process.env.BM25_STORE_NAME || 'bm25-index.json');
         });
     }
 );
@@ -342,7 +355,7 @@ export const promptFlow = ai.defineFlow(
 export const SearchFlow = ai.defineFlow(
     {
         name: "SearchFlow",
-        inputSchema: z.string(),        
+        inputSchema: z.string(),     
     },
     async (input: string) => {
 
