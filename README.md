@@ -2,6 +2,11 @@
 
 Hybrid Search flow is implemented as a combination of BM25 (sparse) retrival and embeddings (dense) retrieval approaches. The results are merged using RRF algorithm in Genkit re-ranker.
 RAG Flow invokes the Search Flow explicicly grounding the search to the returned docs.
+After building the project, first step is create the indexes: invoke
+```
+http://localhost:3400/indexFlow
+```
+
 You may run Genkit developer UI to try the both.
 ```
 npx genkit start -- npm run dev 
@@ -21,3 +26,16 @@ GEMINI_API_KEY=<API key>
 
 ### 3. Get access to Redis with JSON module
 update the .env configuration with corresponding host, port and password settings 
+
+### 4. Search
+Invoke the search by running 
+```
+http://localhost:3400/SearchFlow
+```
+
+### 5. RAG
+Search is interpeted (actually is built for) RAG. SearchFlow() is invoked accordingly as first step in RAGFlow
+```
+http://localhost:3400/RAGFlow
+```
+
