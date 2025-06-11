@@ -19,7 +19,7 @@ genkit --version
 ```
 ### 2. Create GEMINI_API_KEY
 from [here](https://aistudio.google.com/app/apikey)
-and create .env file with 
+and stote it in .env file with 
 ```
 GEMINI_API_KEY=<API key>
 ```

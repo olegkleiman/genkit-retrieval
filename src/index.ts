@@ -343,7 +343,7 @@ const indexFlow = ai.defineFlow({
         });
 
         // Actually generate embedding of each document 
-        // an store this embedding (along with doc's metadata) into 'devLocalVestorStore'
+        // and store this embedding (along with doc's metadata) into 'devLocalVestorStore'
         await ai.index({
             indexer: pdfIndexer,
             documents
